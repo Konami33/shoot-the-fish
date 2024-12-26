@@ -404,11 +404,11 @@ window.addEventListener('load', function() {
                 let message1;
                 let message2;
                 if(this.game.score>this.game.winningScore) {
-                    message1 = 'Nodi you won!';
+                    message1 = 'AYAN you won!';
                     message2 = 'Well Done!';
                 }
                 else {
-                    message1 = 'Nodi You are loser!';
+                    message1 = 'AYAN You are loser!';
                     message2 = 'Try again next time!';
                 }
                 context.font = '80px ' + this.fontFamily;
