@@ -404,7 +404,7 @@ window.addEventListener('load', function() {
                 let message1;
                 let message2;
                 if(this.game.score>this.game.winningScore) {
-                    message1 = 'AYAN you won!';
+                    message1 = 'ARHAM you won!';
                     message2 = 'Well Done!';
                 }
                 else {
