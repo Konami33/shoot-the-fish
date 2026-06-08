@@ -5,6 +5,10 @@ window.addEventListener('load', function() {
     canvas.width = 1400;
     canvas.height = 499;
 
+    //power-up configuration
+    const POWERUP_DURATIONS = { shield: 8000, double: 8000, speed: 6000 };
+    const POWERUP_COLORS    = { shield: '#4dd0e1', double: '#ffc107', speed: '#9ccc65' };
+    const POWERUP_LABELS    = { shield: 'SH',      double: '2X',      speed: '>>' };
 
     // it will keep track of the gamer input
     class InputHandler {
@@ -101,6 +105,81 @@ window.addEventListener('load', function() {
         }
     }
     //controll the main character
+    class PowerUp {
+        constructor(game, type) {
+            this.game = game;
+            this.type = type;                          // 'shield' | 'double' | 'speed'
+            this.width = 40;
+            this.height = 40;
+            this.x = game.width;                       // spawn off-screen right
+            this.y = Math.random() * (game.height * .9 - this.height);
+            this.speedX = Math.random() * 1.2 + 0.5;   // drift left
+            this.markForDeletionProperty = false;
+            this.pulsePhase = 0;
+        }
+        update() {
+            this.x -= this.speedX + this.game.speed;
+            this.pulsePhase += 0.05;
+            if (this.x + this.width < 0) this.markForDeletionProperty = true;
+            if (this.game.player && this.game.checkCollision(this.game.player, this)) {
+                this.activate(this.game.player, this.game);
+                this.markForDeletionProperty = true;
+            }
+        }
+        draw(context) {
+            const pulse = 1 + 0.15 * Math.sin(this.pulsePhase);
+            const cx = this.x + this.width / 2;
+            const cy = this.y + this.height / 2;
+            const r  = (this.width / 2) * pulse;
+            context.save();
+            context.shadowColor = 'white';
+            context.shadowBlur = 8;
+            if (this.type === 'shield') {
+                context.fillStyle = POWERUP_COLORS.shield;
+                context.beginPath(); context.arc(cx, cy, r, 0, Math.PI*2); context.fill();
+                context.strokeStyle = 'white'; context.lineWidth = 2;
+                context.beginPath(); context.arc(cx, cy, r * 0.6, 0, Math.PI*2); context.stroke();
+            } else if (this.type === 'double') {
+                context.fillStyle = POWERUP_COLORS.double;
+                const w = this.width * pulse, h = this.height * pulse;
+                this._roundRect(context, cx - w/2, cy - h/2, w, h, 6); context.fill();
+                context.fillStyle = 'white';
+                context.fillRect(cx - 8, cy - 5, 3, 10);
+                context.fillRect(cx + 5, cy - 5, 3, 10);
+            } else { // 'speed'
+                context.fillStyle = POWERUP_COLORS.speed;
+                const s = this.width * pulse;
+                context.beginPath();
+                context.moveTo(cx - s/2, cy - s/2);
+                context.lineTo(cx + s/2, cy);
+                context.lineTo(cx - s/2, cy + s/2);
+                context.closePath();
+                context.fill();
+            }
+            context.restore();
+        }
+        _roundRect(ctx, x, y, w, h, rad) {
+            ctx.beginPath();
+            ctx.moveTo(x + rad, y);
+            ctx.arcTo(x + w, y,     x + w, y + h, rad);
+            ctx.arcTo(x + w, y + h, x,     y + h, rad);
+            ctx.arcTo(x,     y + h, x,     y,     rad);
+            ctx.arcTo(x,     y,     x + w, y,     rad);
+            ctx.closePath();
+        }
+        activate(player, game) {
+            const dur = POWERUP_DURATIONS[this.type];
+            if (this.type === 'shield') {
+                player.activePowerUps.shield = { remainingMs: dur };
+            } else if (this.type === 'double') {
+                player.activePowerUps.double = { remainingMs: dur };
+                if (game.ammo < game.maxAmmo) game.ammo = game.maxAmmo;
+            } else if (this.type === 'speed') {
+                player.activePowerUps.speed = { remainingMs: dur };
+            }
+        }
+    }
+    //controll the main character
     class Player {
         constructor(game) {
             this.game = game;
@@ -119,12 +198,15 @@ window.addEventListener('load', function() {
             this.powerUp = false;
             this.powerUpTimer = 0;
             this.powerUpLimit = 1500;
+            //multi-power-up state map (coexists with the LuckyFish powerUp above)
+            this.activePowerUps = {};
         }
         update(deltaTime) {
+            const speedMult = this.activePowerUps.speed ? 1.8 : 1.0;
             if(this.game.keys.includes('ArrowUp'))
-                this.speedY = -this.maxspeed;
+                this.speedY = -this.maxspeed * speedMult;
             else if(this.game.keys.includes('ArrowDown'))
-                this.speedY = this.maxspeed;
+                this.speedY = this.maxspeed * speedMult;
             else
                 this.speedY = 0;
             this.y += this.speedY;
@@ -156,6 +238,19 @@ window.addEventListener('load', function() {
                     this.game.ammo += .1;
                 }
             }
+            //per-type pickup timers (shield / double / speed). Decrement and clean up.
+            if(!this.game.gameOver) {
+                for(const type of Object.keys(this.activePowerUps)) {
+                    this.activePowerUps[type].remainingMs -= deltaTime;
+                    if(this.activePowerUps[type].remainingMs <= 0) {
+                        delete this.activePowerUps[type];
+                    }
+                }
+                //sync frameY to double-shot pickup when LuckyFish powerUp is not active
+                if(!this.powerUp) {
+                    this.frameY = this.activePowerUps.double ? 1 : 0;
+                }
+            }
         }
         draw(context) {
             //context.fillStyle = 'black';
@@ -181,10 +276,12 @@ window.addEventListener('load', function() {
                 this.projectiles.push(new Projectile(this.game, this.x+80, this.y+175));
             }
         }
-        enterPowerUp() {
+        enterPowerUp(type = 'double') {
             this.powerUpTimer = 0;
             this.powerUp = true;
-            if(this.game.amm0<this.game.maxAmmo)
+            //also seed the per-type map so the double-shot effect runs on its own timer
+            this.activePowerUps.double = { remainingMs: POWERUP_DURATIONS.double };
+            if(this.game.ammo<this.game.maxAmmo)
                 this.game.ammo = this.game.maxAmmo;
         }
     }
@@ -422,8 +519,25 @@ window.addEventListener('load', function() {
             for(let i = 0; i<this.game.ammo; i++){
                 context.fillRect(20 + 5*i, 50, 3, 20);
             }
+            //active power-up strip (top-right)
+            if(this.game.player) {
+                const entries = Object.entries(this.game.player.activePowerUps);
+                for(let i = 0; i < entries.length; i++) {
+                    const type = entries[i][0];
+                    const data = entries[i][1];
+                    const x = this.game.width - 20 - i * 130;
+                    const y = 40;
+                    context.fillStyle = POWERUP_COLORS[type];
+                    context.beginPath();
+                    context.arc(x - 70, y - 7, 10, 0, Math.PI * 2);
+                    context.fill();
+                    context.fillStyle = 'white';
+                    const seconds = (data.remainingMs * 0.001).toFixed(1);
+                    context.fillText(POWERUP_LABELS[type] + ' ' + seconds + 's', x, y);
+                }
+            }
             context.restore();
-            
+
         }
     }
     //it is the brain of the game.all the object will come here
@@ -439,8 +553,11 @@ window.addEventListener('load', function() {
             this.enemies = [];
             this.particles = [];
             this.explosions = [];
+            this.powerUps = [];
             this.enemyTimer = 0;
             this.enemyInterval = 2000;
+            this.powerUpTimer = 0;
+            this.powerUpInterval = 6000;
             this.ammo = 30;
             this.maxAmmo = 180;
             this.ammoTimer = 0;
@@ -481,27 +598,41 @@ window.addEventListener('load', function() {
             //explsion update
             this.explosions.forEach(explosion => explosion.update(deltaTime));
             this.explosions = this.explosions.filter(explosion => !explosion.markForDeletionProperty);
+            //power-up update
+            this.powerUps.forEach(powerUp => powerUp.update());
+            this.powerUps = this.powerUps.filter(powerUp => !powerUp.markForDeletionProperty);
             //enemy ----
             this.enemies.forEach(enemy => {
                 enemy.update();//creating enemy
                 
                 //checking the collision with player and enemy
                 if(this.checkCollision(this.player, enemy)) {
-                    enemy.markForDeletionProperty = true;
-                    //add explosion effect
-                    this.addExplosion(enemy);
-
-                    //enemy er shathe collide korle 10 kore particle porbe
-                    for(let i = 0; i<enemy.score;i++) {
-                        this.particles.push(new Particle(this, enemy.x + enemy.width * .5, enemy.y + enemy.height * .5));
-                    }
-                    
-                    if(enemy.type === 'lucky') {
-                        this.player.enterPowerUp();
+                    if(this.player.activePowerUps.shield) {
+                        //absorbed: small particle burst, shield consumed, enemy removed (no score change)
+                        for(let i = 0; i<6; i++) {
+                            this.particles.push(new Particle(this, enemy.x + enemy.width * .5, enemy.y + enemy.height * .5));
+                        }
+                        this.addExplosion(enemy);
+                        delete this.player.activePowerUps.shield;
+                        enemy.markForDeletionProperty = true;
                     }
                     else {
-                        if(!this.gameOver) {
-                            this.score--;
+                        enemy.markForDeletionProperty = true;
+                        //add explosion effect
+                        this.addExplosion(enemy);
+
+                        //enemy er shathe collide korle 10 kore particle porbe
+                        for(let i = 0; i<enemy.score;i++) {
+                            this.particles.push(new Particle(this, enemy.x + enemy.width * .5, enemy.y + enemy.height * .5));
+                        }
+
+                        if(enemy.type === 'lucky') {
+                            this.player.enterPowerUp();
+                        }
+                        else {
+                            if(!this.gameOver) {
+                                this.score--;
+                            }
                         }
                     }
                 }
@@ -542,6 +673,14 @@ window.addEventListener('load', function() {
             else {
                 this.enemyTimer += deltaTime;
             }
+            //power-up spawn
+            if(this.powerUpTimer > this.powerUpInterval && !this.gameOver) {
+                this.addPowerUp();
+                this.powerUpTimer = 0;
+            }
+            else {
+                this.powerUpTimer += deltaTime;
+            }
         }
         draw(context) {
             this.background.draw(context);
@@ -550,6 +689,9 @@ window.addEventListener('load', function() {
             this.particles.forEach( particle => particle.draw(context));
             this.enemies.forEach(enemy => {
                 enemy.draw(context);
+            });
+            this.powerUps.forEach(powerUp => {
+                powerUp.draw(context);
             });
             this.explosions.forEach(explosion => {
                 explosion.draw(context);
@@ -566,6 +708,17 @@ window.addEventListener('load', function() {
                 this.enemies.push(new HiveWhale(this));
             else
                 this.enemies.push(new LuckyFish(this));
+        }
+        addPowerUp() {
+            const types   = ['shield', 'double', 'speed'];
+            const weights = [0.34, 0.33, 0.33];
+            const r = Math.random();
+            let cum = 0, type = types[0];
+            for(let i = 0; i < types.length; i++) {
+                cum += weights[i];
+                if(r < cum) { type = types[i]; break; }
+            }
+            this.powerUps.push(new PowerUp(this, type));
         }
         addExplosion(enemy) {
             const randomize = Math.random();
